@@ -2,8 +2,6 @@
 
 var _path = require("path");
 
-var _async = _interopRequireDefault(require("async"));
-
 var _chokidar = _interopRequireDefault(require("chokidar"));
 
 var _chalk = _interopRequireDefault(require("chalk"));
@@ -131,32 +129,7 @@ function runAndUpdate(metalsmith, files, livereload, options, previousFilesMap) 
   });
 }
 
-function buildFiles(metalsmith, paths, livereload, options, previousFilesMap) {
-  var files = {};
-
-  _async.default.each(paths, function (path, cb) {
-    metalsmith.readFile(path, function (err, file) {
-      if (err) {
-        options.log(_chalk.default.red("".concat(nok, " ").concat(err)));
-        return cb(err);
-      }
-
-      files[path] = file;
-      cb();
-    });
-  }, function (err) {
-    if (err) {
-      options.log(_chalk.default.red("".concat(nok, " ").concat(err)));
-      return;
-    }
-
-    var nbOfFiles = Object.keys(files).length;
-    options.log(_chalk.default.gray("- Updating ".concat(nbOfFiles, " file").concat(nbOfFiles > 1 ? "s" : "", "...")));
-    runAndUpdate(metalsmith, files, livereload, options, previousFilesMap);
-  });
-}
-
-function buildPattern(metalsmith, patterns, livereload, options, previousFilesMap) {
+function rebuild(metalsmith, patterns, livereload, options, previousFilesMap) {
   (0, _unyield.default)(metalsmith.read())(function (err, files) {
     if (err) {
       options.log(_chalk.default.red("".concat(nok, " ").concat(err)));
@@ -167,10 +140,76 @@ function buildPattern(metalsmith, patterns, livereload, options, previousFilesMa
     (0, _multimatch.default)(Object.keys(files), patterns).forEach(function (path) {
       return filesToUpdate[path] = files[path];
     });
+    patterns.forEach(function (p) {
+      if (files[p]) {
+        filesToUpdate[p] = files[p];
+      }
+    });
     var nbOfFiles = Object.keys(filesToUpdate).length;
     options.log(_chalk.default.gray("- Updating ".concat(nbOfFiles, " file").concat(nbOfFiles > 1 ? "s" : "", "...")));
     runAndUpdate(metalsmith, filesToUpdate, livereload, options, previousFilesMap);
   });
+}
+
+function getRebuildList(metalsmith, patterns, changed) {
+  var patternsToUpdate = Object.keys(patterns).filter(function (pattern) {
+    return patterns[pattern].has("${self}");
+  });
+  var filesToUpdate = (0, _multimatch.default)(changed, patternsToUpdate).map(function (file) {
+    var filepath = (0, _path.resolve)(metalsmith.path(), file);
+    return (0, _path.relative)(metalsmith.source(), filepath);
+  });
+  var patternsToUpdatePattern = [];
+
+  var _arr = Object.keys(patterns);
+
+  var _loop = function _loop() {
+    var pattern = _arr[_i];
+    var _iteratorNormalCompletion = true;
+    var _didIteratorError = false;
+    var _iteratorError = undefined;
+
+    try {
+      var _loop2 = function _loop2() {
+        var updatePattern = _step.value;
+
+        if (updatePattern.includes("${dirname}")) {
+          patternsToUpdatePattern.push.apply(patternsToUpdatePattern, _toConsumableArray(changed.filter(function (pathToUpdate) {
+            return (0, _multimatch.default)(pathToUpdate, pattern).length > 0;
+          }).map(function (pathToUpdate) {
+            var absolutePath = (0, _path.dirname)((0, _path.resolve)(metalsmith.directory(), pathToUpdate)),
+                relativeToSrc = (0, _path.relative)(metalsmith.source(), absolutePath);
+            return (0, _path.normalize)(updatePattern.replace("${dirname}", relativeToSrc));
+          })));
+        } else if (updatePattern !== "${self}" && (0, _multimatch.default)(changed, pattern).length > 0) {
+          patternsToUpdatePattern.push(updatePattern);
+        }
+      };
+
+      for (var _iterator = patterns[pattern][Symbol.iterator](), _step; !(_iteratorNormalCompletion = (_step = _iterator.next()).done); _iteratorNormalCompletion = true) {
+        _loop2();
+      }
+    } catch (err) {
+      _didIteratorError = true;
+      _iteratorError = err;
+    } finally {
+      try {
+        if (!_iteratorNormalCompletion && _iterator.return != null) {
+          _iterator.return();
+        }
+      } finally {
+        if (_didIteratorError) {
+          throw _iteratorError;
+        }
+      }
+    }
+  };
+
+  for (var _i = 0; _i < _arr.length; _i++) {
+    _loop();
+  }
+
+  return filesToUpdate.concat(patternsToUpdatePattern);
 }
 
 module.exports = function (options) {
@@ -218,7 +257,14 @@ module.exports = function (options) {
       }
 
       var watchPatternRelative = (0, _path.relative)(metalsmith.directory(), watchPattern);
-      patterns[watchPatternRelative] = options.paths[pattern];
+      var replacement = new Set(Array.isArray(options.paths[pattern]) ? options.paths[pattern] : [options.paths[pattern]]);
+
+      if (replacement.has(true)) {
+        replacement.delete(true);
+        replacement.add("${self}");
+      }
+
+      patterns[watchPatternRelative] = replacement;
     });
 
     var watcher = _chokidar.default.watch(Object.keys(patterns), Object.assign({
@@ -259,37 +305,10 @@ module.exports = function (options) {
           }
         }
 
-        var patternsToUpdate = Object.keys(patterns).filter(function (pattern) {
-          return patterns[pattern] === true;
-        });
-        var filesToUpdate = (0, _multimatch.default)(pathsToUpdate, patternsToUpdate).map(function (file) {
-          var filepath = (0, _path.resolve)(metalsmith.path(), file);
-          return (0, _path.relative)(metalsmith.source(), filepath);
-        });
+        var toRebuild = getRebuildList(metalsmith, patterns, pathsToUpdate);
 
-        if (filesToUpdate.length) {
-          buildFiles(metalsmith, filesToUpdate, livereload, options, previousFilesMap);
-        }
-
-        var patternsToUpdatePattern = [];
-        Object.keys(patterns).filter(function (pattern) {
-          return patterns[pattern] !== true;
-        }).forEach(function (pattern) {
-          if (patterns[pattern].includes("${dirname}")) {
-            patternsToUpdatePattern.push.apply(patternsToUpdatePattern, _toConsumableArray(pathsToUpdate.filter(function (pathToUpdate) {
-              return (0, _multimatch.default)(pathToUpdate, pattern).length > 0;
-            }).map(function (pathToUpdate) {
-              var absolutePath = (0, _path.dirname)((0, _path.resolve)(metalsmith.directory(), pathToUpdate)),
-                  relativeToSrc = (0, _path.relative)(metalsmith.source(), absolutePath);
-              return (0, _path.normalize)(patterns[pattern].replace("${dirname}", relativeToSrc));
-            })));
-          } else if ((0, _multimatch.default)(pathsToUpdate, pattern).length > 0) {
-            patternsToUpdatePattern.push(patterns[pattern]);
-          }
-        });
-
-        if (patternsToUpdatePattern.length) {
-          buildPattern(metalsmith, patternsToUpdatePattern, livereload, options, previousFilesMap);
+        if (toRebuild.length) {
+          rebuild(metalsmith, toRebuild, livereload, options, previousFilesMap);
         }
 
         pathsToUpdate = [];
