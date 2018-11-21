@@ -271,12 +271,21 @@ module.exports = function (options) {
           buildFiles(metalsmith, filesToUpdate, livereload, options, previousFilesMap);
         }
 
-        var patternsToUpdatePattern = Object.keys(patterns).filter(function (pattern) {
+        var patternsToUpdatePattern = [];
+        Object.keys(patterns).filter(function (pattern) {
           return patterns[pattern] !== true;
-        }).filter(function (pattern) {
-          return (0, _multimatch.default)(pathsToUpdate, pattern).length > 0;
-        }).map(function (pattern) {
-          return patterns[pattern];
+        }).forEach(function (pattern) {
+          if (patterns[pattern].includes("${dirname}")) {
+            patternsToUpdatePattern.push.apply(patternsToUpdatePattern, _toConsumableArray(pathsToUpdate.filter(function (pathToUpdate) {
+              return (0, _multimatch.default)(pathToUpdate, pattern).length > 0;
+            }).map(function (pathToUpdate) {
+              var absolutePath = (0, _path.dirname)((0, _path.resolve)(metalsmith.directory(), pathToUpdate)),
+                  relativeToSrc = (0, _path.relative)(metalsmith.source(), absolutePath);
+              return (0, _path.normalize)(patterns[pattern].replace("${dirname}", relativeToSrc));
+            })));
+          } else if ((0, _multimatch.default)(pathsToUpdate, pattern).length > 0) {
+            patternsToUpdatePattern.push(patterns[pattern]);
+          }
         });
 
         if (patternsToUpdatePattern.length) {
